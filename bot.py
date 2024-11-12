@@ -192,8 +192,7 @@ async def delete_user(message: types.Message):
     data = {"telegramId": message.from_user.id}
     async with httpx.AsyncClient() as client:
         try:
-            # Use 'data' instead of 'json' to send the payload
-            response = await client.delete(f'{BASE_URL}/delete', data=data)
+            response = await client.delete(f'{BASE_URL}/delete', json=data)
             response.raise_for_status()
             await message.reply(
                 'Ваш аккаунт успешно удалён!\n<b>Чтобы зарегистрироваться нажмите /start</b>',
@@ -206,6 +205,7 @@ async def delete_user(message: types.Message):
                 f'Сервер не отвечает.\n<b>Ошибка удаления пользователя: {e}</b>',
                 parse_mode='html'
             )
+
 
 # ==========================
 # FastAPI Routes
