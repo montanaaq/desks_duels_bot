@@ -1,10 +1,9 @@
 import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
 from datetime import datetime
 
-import httpx
+import requests
 import uvicorn
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
@@ -68,18 +67,28 @@ app = FastAPI()
 # Utility Functions
 # ==========================
 
+async def make_request(func, *args, **kwargs):
+    """
+    Helper function to run synchronous HTTP requests in an executor.
+    """
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+    except Exception as e:
+        logger.error(f"Error in make_request: {e}")
+        raise
+
 async def get_all_users():
     """
     Fetch all users from the backend API asynchronously.
     """
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(f"{BASE_URL}/users")
-            response.raise_for_status()
-            return response.json()  # Assuming API returns list of user dictionaries
-        except httpx.RequestError as e:
-            logger.error(f"Failed to fetch users: {e}")
-            return []
+    try:
+        response = await make_request(requests.get, f"{BASE_URL}/users")
+        response.raise_for_status()
+        return response.json()  # Assuming API returns list of user dictionaries
+    except requests.RequestException as e:
+        logger.error(f"Failed to fetch users: {e}")
+        return []
 
 async def notify_user(telegram_id):
     """
@@ -168,15 +177,18 @@ async def start_command(message: types.Message):
     )
     
     # Send registration request to the backend
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(f'{BASE_URL}/register', json=user_data)
-            response.raise_for_status()
-            logger.info(f"User {message.from_user.id} registered successfully.")
-        except httpx.RequestError as e:
-            logger.error(f"Error registering user {message.from_user.id}: {e}")
-            await message.reply("Произошла ошибка при регистрации. Попробуйте снова позже.")
-            return
+    try:
+        response = await make_request(
+            requests.post,
+            f'{BASE_URL}/register',
+            json=user_data
+        )
+        response.raise_for_status()
+        logger.info(f"User {message.from_user.id} registered successfully.")
+    except requests.RequestException as e:
+        logger.error(f"Error registering user {message.from_user.id}: {e}")
+        await message.reply("Произошла ошибка при регистрации. Попробуйте снова позже.")
+        return
     
     welcome_text = (
         f"Привет, <b>{message.from_user.first_name}</b>! Добро пожаловать в 🎉 <b>Desks Duels</b> 🎉 \n"
@@ -190,22 +202,24 @@ async def start_command(message: types.Message):
 async def delete_user(message: types.Message):
     logger.info(f"User {message.from_user.id} requested account deletion.")
     data = {"telegramId": message.from_user.id}
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.delete(f'{BASE_URL}/delete', params=data)
-            response.raise_for_status()
-            await message.reply(
-                'Ваш аккаунт успешно удалён!\n<b>Чтобы зарегистрироваться нажмите /start</b>',
-                parse_mode='html'
-            )
-            logger.info(f"User {message.from_user.id} deleted successfully.")
-        except httpx.RequestError as e:
-            logger.error(f"Error deleting user {message.from_user.id}: {e}")
-            await message.reply(
-                f'Сервер не отвечает.\n<b>Ошибка удаления пользователя: {e}</b>',
-                parse_mode='html'
-            )
-
+    try:
+        response = await make_request(
+            requests.delete,
+            f'{BASE_URL}/delete',
+            json=data
+        )
+        response.raise_for_status()
+        await message.reply(
+            'Ваш аккаунт успешно удалён!\n<b>Чтобы зарегистрироваться нажмите /start</b>',
+            parse_mode='html'
+        )
+        logger.info(f"User {message.from_user.id} deleted successfully.")
+    except requests.RequestException as e:
+        logger.error(f"Error deleting user {message.from_user.id}: {e}")
+        await message.reply(
+            f'Сервер не отвечает.\n<b>Ошибка удаления пользователя: {e}</b>',
+            parse_mode='html'
+        )
 
 # ==========================
 # FastAPI Routes
@@ -230,7 +244,6 @@ async def telegram_webhook(request: Request):
         logger.error(f"Failed to process update: {e}")
         return JSONResponse(content={"status": "error", "message": str(e)}, status_code=400)
 
-
 # ==========================
 # Lifespan Event Handlers
 # ==========================
@@ -246,16 +259,16 @@ async def on_startup_event():
     logger.info("Scheduler started.")
     
     # Set webhook
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                f'https://api.telegram.org/bot{API_TOKEN}/setWebhook',
-                json={"url": WEBHOOK_URL}
-            )
-            response.raise_for_status()
-            logger.info(f"Webhook set to {WEBHOOK_URL}")
-        except Exception as e:
-            logger.error(f"Failed to set webhook: {e}")
+    try:
+        response = await make_request(
+            requests.post,
+            f'https://api.telegram.org/bot{API_TOKEN}/setWebhook',
+            json={"url": WEBHOOK_URL}
+        )
+        response.raise_for_status()
+        logger.info(f"Webhook set to {WEBHOOK_URL}")
+    except requests.RequestException as e:
+        logger.error(f"Failed to set webhook: {e}")
 
 @app.on_event("shutdown")
 async def on_shutdown_event():
@@ -268,15 +281,15 @@ async def on_shutdown_event():
     logger.info("Bot and scheduler shut down.")
     
     # Remove webhook
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                f'https://api.telegram.org/bot{API_TOKEN}/deleteWebhook'
-            )
-            response.raise_for_status()
-            logger.info("Webhook deleted successfully.")
-        except Exception as e:
-            logger.error(f"Failed to delete webhook: {e}")
+    try:
+        response = await make_request(
+            requests.post,
+            f'https://api.telegram.org/bot{API_TOKEN}/deleteWebhook'
+        )
+        response.raise_for_status()
+        logger.info("Webhook deleted successfully.")
+    except requests.RequestException as e:
+        logger.error(f"Failed to delete webhook: {e}")
 
 # ==========================
 # Main Entry Point
