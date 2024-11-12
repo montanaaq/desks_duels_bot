@@ -3,6 +3,7 @@ import logging
 import asyncio
 from datetime import datetime
 
+from dotenv import load_dotenv  # For local development
 import httpx
 import uvicorn
 from aiogram import Bot, Dispatcher, types
@@ -11,17 +12,31 @@ from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
+
+# Load environment variables from .env file (for local development)
+load_dotenv()
 
 # ==========================
 # Configuration and Settings
 # ==========================
 
 # Fetch environment variables for security
-API_TOKEN = '7421252065:AAGFWO70HPOSPkS8BU-CczsM5Pa5tBM3JO8'
-BASE_URL = "https://desks-duels-backend.onrender.com/auth"
-PORT = 8000
+API_TOKEN = os.getenv('API_TOKEN')
+BASE_URL = os.getenv('BASE_URL')
+PORT = int(os.getenv('PORT', 8000))  # Provide a default port if not set
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = "https://desks-duels-bot.onrender.com{WEBHOOK_PATH}"
+
+# Construct WEBHOOK_URL correctly
+RENDER_EXTERNAL_HOSTNAME = os.getenv('RENDER_EXTERNAL_HOSTNAME')  # Automatically set by Render
+if RENDER_EXTERNAL_HOSTNAME:
+    # Ensure RENDER_EXTERNAL_HOSTNAME does not include 'http://' or 'https://'
+    if RENDER_EXTERNAL_HOSTNAME.startswith("http://") or RENDER_EXTERNAL_HOSTNAME.startswith("https://"):
+        RENDER_EXTERNAL_HOSTNAME = RENDER_EXTERNAL_HOSTNAME.split("://")[1]
+    WEBHOOK_URL = f"https://{RENDER_EXTERNAL_HOSTNAME}{WEBHOOK_PATH}"
+else:
+    # Fallback for local development
+    WEBHOOK_URL = os.getenv('WEBHOOK_URL', f"http://localhost:{PORT}{WEBHOOK_PATH}")
 
 # ==========================
 # Initialize Bot and Dispatcher
@@ -89,21 +104,24 @@ async def send_notifications():
     """
     Send notifications to all users.
     """
-    users = await get_all_users()
-    if not users:
-        logger.warning("No users to notify.")
-        return
-    
-    tasks = []
-    for user in users:
-        telegram_id = user.get('telegramId')
-        if telegram_id:
-            tasks.append(notify_user(telegram_id))
-        else:
-            logger.warning(f"User data missing 'telegramId': {user}")
-    
-    if tasks:
-        await asyncio.gather(*tasks)
+    try:
+        users = await get_all_users()
+        if not users:
+            logger.warning("No users to notify.")
+            return
+        
+        tasks = []
+        for user in users:
+            telegram_id = user.get('telegramId')
+            if telegram_id:
+                tasks.append(notify_user(telegram_id))
+            else:
+                logger.warning(f"User data missing 'telegramId': {user}")
+        
+        if tasks:
+            await asyncio.gather(*tasks)
+    except Exception as e:
+        logger.error(f"Error in send_notifications: {e}")
 
 def schedule_notifications():
     """
@@ -215,7 +233,7 @@ async def telegram_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid update")
 
 # ==========================
-# Startup and Shutdown Events
+# Lifespan Event Handlers
 # ==========================
 
 @app.on_event("startup")
@@ -231,10 +249,11 @@ async def on_startup_event():
     # Set webhook
     async with httpx.AsyncClient() as client:
         try:
-            await client.post(
+            response = await client.post(
                 f'https://api.telegram.org/bot{API_TOKEN}/setWebhook',
                 json={"url": WEBHOOK_URL}
             )
+            response.raise_for_status()
             logger.info(f"Webhook set to {WEBHOOK_URL}")
         except Exception as e:
             logger.error(f"Failed to set webhook: {e}")
@@ -252,9 +271,10 @@ async def on_shutdown_event():
     # Remove webhook
     async with httpx.AsyncClient() as client:
         try:
-            await client.post(
+            response = await client.post(
                 f'https://api.telegram.org/bot{API_TOKEN}/deleteWebhook'
             )
+            response.raise_for_status()
             logger.info("Webhook deleted successfully.")
         except Exception as e:
             logger.error(f"Failed to delete webhook: {e}")
