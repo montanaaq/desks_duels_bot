@@ -1,16 +1,15 @@
-import asyncio
-import logging
 import os
-from datetime import datetime, timedelta
+import logging
+import asyncio
+from datetime import datetime
 
 import httpx
 import uvicorn
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
                            WebAppInfo)
-from aiogram.utils import executor
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 
 # ==========================
@@ -21,6 +20,8 @@ from fastapi.responses import JSONResponse
 API_TOKEN = '7421252065:AAGFWO70HPOSPkS8BU-CczsM5Pa5tBM3JO8'
 BASE_URL = "https://desks-duels-backend.onrender.com/auth"
 PORT = 8000
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = "https://desks-duels-bot.onrender.com{WEBHOOK_PATH}"
 
 # ==========================
 # Initialize Bot and Dispatcher
@@ -58,7 +59,7 @@ async def get_all_users():
     """
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get("https://desks-duels-backend.onrender.com/users")
+            response = await client.get(f"{BASE_URL}/users")
             response.raise_for_status()
             return response.json()  # Assuming API returns list of user dictionaries
         except httpx.RequestError as e:
@@ -198,17 +199,27 @@ async def health_check():
     """
     return JSONResponse(content={"status": "ok"}, status_code=200)
 
-# Optionally, add more routes as needed
-# Example:
-# @app.get("/another-route")
-# async def another_route():
-#     return {"message": "Another route"}
+@app.post(WEBHOOK_PATH)
+async def telegram_webhook(request: Request):
+    """
+    Webhook endpoint for Telegram updates.
+    """
+    try:
+        update = types.Update(**await request.json())
+        Dispatcher.set_current(dp)
+        Bot.set_current(bot)
+        await dp.process_update(update)
+        return JSONResponse(content={"status": "ok"}, status_code=200)
+    except Exception as e:
+        logger.error(f"Failed to process update: {e}")
+        raise HTTPException(status_code=400, detail="Invalid update")
 
 # ==========================
 # Startup and Shutdown Events
 # ==========================
 
-async def on_startup(dp):
+@app.on_event("startup")
+async def on_startup_event():
     """
     Actions to perform on startup.
     """
@@ -216,8 +227,20 @@ async def on_startup(dp):
     schedule_notifications()
     scheduler.start()
     logger.info("Scheduler started.")
+    
+    # Set webhook
+    async with httpx.AsyncClient() as client:
+        try:
+            await client.post(
+                f'https://api.telegram.org/bot{API_TOKEN}/setWebhook',
+                json={"url": WEBHOOK_URL}
+            )
+            logger.info(f"Webhook set to {WEBHOOK_URL}")
+        except Exception as e:
+            logger.error(f"Failed to set webhook: {e}")
 
-async def on_shutdown(dp):
+@app.on_event("shutdown")
+async def on_shutdown_event():
     """
     Actions to perform on shutdown.
     """
@@ -225,30 +248,21 @@ async def on_shutdown(dp):
     await bot.close()
     scheduler.shutdown()
     logger.info("Bot and scheduler shut down.")
+    
+    # Remove webhook
+    async with httpx.AsyncClient() as client:
+        try:
+            await client.post(
+                f'https://api.telegram.org/bot{API_TOKEN}/deleteWebhook'
+            )
+            logger.info("Webhook deleted successfully.")
+        except Exception as e:
+            logger.error(f"Failed to delete webhook: {e}")
 
 # ==========================
 # Main Entry Point
 # ==========================
 
-def start_bot():
-    """
-    Start the aiogram bot and FastAPI server.
-    """
-    loop = asyncio.get_event_loop()
-
-    # Create a task for aiogram's polling
-    loop.create_task(executor.start_polling(
-        dp,
-        on_startup=on_startup,
-        on_shutdown=on_shutdown,
-        skip_updates=True
-    ))
-
-    # Run the FastAPI app with Uvicorn
-    config = uvicorn.Config(app, host="0.0.0.0", port=PORT, log_level="info")
-    server = uvicorn.Server(config)
-
-    loop.run_until_complete(server.serve())
-
 if __name__ == '__main__':
-    start_bot()
+    # Run the FastAPI app with Uvicorn
+    uvicorn.run("bot:app", host="0.0.0.0", port=PORT, log_level="info")
