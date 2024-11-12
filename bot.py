@@ -192,7 +192,7 @@ async def delete_user(message: types.Message):
     data = {"telegramId": message.from_user.id}
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.delete(f'{BASE_URL}/delete', json=data)
+            response = await client.delete(f'{BASE_URL}/delete', params=data)
             response.raise_for_status()
             await message.reply(
                 'Ваш аккаунт успешно удалён!\n<b>Чтобы зарегистрироваться нажмите /start</b>',
@@ -220,27 +220,16 @@ async def health_check():
 
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
-    """
-    Webhook endpoint for Telegram updates.
-    """
     try:
-        # Fetch raw JSON payload from the request body
         update_data = await request.json()
-
-        # Create the update object
+        logger.info(f"Received webhook update: {update_data}")  # Log the update data
         update = types.Update(**update_data)
-
-        # Set the current bot and dispatcher
-        Dispatcher.set_current(dp)
-        Bot.set_current(bot)
-
-        # Process the update
         await dp.process_update(update)
-
         return JSONResponse(content={"status": "ok"}, status_code=200)
     except Exception as e:
         logger.error(f"Failed to process update: {e}")
         return JSONResponse(content={"status": "error", "message": str(e)}, status_code=400)
+
 
 # ==========================
 # Lifespan Event Handlers
