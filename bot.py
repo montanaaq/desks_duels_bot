@@ -1,18 +1,18 @@
-import os
-import logging
 import asyncio
+import logging
+import os
+from contextlib import asynccontextmanager
 from datetime import datetime
 
-from dotenv import load_dotenv  # For local development
 import httpx
 import uvicorn
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
                            WebAppInfo)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI, Request, HTTPException
+from dotenv import load_dotenv  # For local development
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from contextlib import asynccontextmanager
 
 # Load environment variables from .env file (for local development)
 load_dotenv()
@@ -192,7 +192,8 @@ async def delete_user(message: types.Message):
     data = {"telegramId": message.from_user.id}
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.delete(f'{BASE_URL}/delete', json=data)
+            # Use 'data' instead of 'json' to send the payload
+            response = await client.delete(f'{BASE_URL}/delete', data=data)
             response.raise_for_status()
             await message.reply(
                 'Ваш аккаунт успешно удалён!\n<b>Чтобы зарегистрироваться нажмите /start</b>',
@@ -223,14 +224,23 @@ async def telegram_webhook(request: Request):
     Webhook endpoint for Telegram updates.
     """
     try:
-        update = types.Update(**await request.json())
+        # Fetch raw JSON payload from the request body
+        update_data = await request.json()
+
+        # Create the update object
+        update = types.Update(**update_data)
+
+        # Set the current bot and dispatcher
         Dispatcher.set_current(dp)
         Bot.set_current(bot)
+
+        # Process the update
         await dp.process_update(update)
+
         return JSONResponse(content={"status": "ok"}, status_code=200)
     except Exception as e:
         logger.error(f"Failed to process update: {e}")
-        raise HTTPException(status_code=400, detail="Invalid update")
+        return JSONResponse(content={"status": "error", "message": str(e)}, status_code=400)
 
 # ==========================
 # Lifespan Event Handlers
