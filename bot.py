@@ -32,7 +32,7 @@ if RENDER_EXTERNAL_HOSTNAME:
     WEBHOOK_URL = f"https://{RENDER_EXTERNAL_HOSTNAME}{WEBHOOK_PATH}"
 else:
     # Для локальной разработки используйте ngrok URL если необходимо
-    WEBHOOK_URL = os.getenv('WEBHOOK_URL', "")
+    WEBHOOK_URL = os.getenv('WEBHOOK_URL', "https://abcd1234.ngrok.io/webhook")  # Замените на ваш реальный ngrok URL
 
 # ==========================
 # Инициализация Бота и Диспетчера
@@ -202,6 +202,40 @@ async def toggle_notifications(message: types.Message):
     else:
         await message.reply("Уведомления отключены. Вы больше не будете получать уведомления.")
         logger.info(f"Пользователь {message.from_user.id} отключил уведомления.")
+
+@dp.message_handler(commands=['restart'])
+async def delete_user(message: types.Message):
+    logger.info(f"Пользователь {message.from_user.id} запросил удаление аккаунта.")
+    data = {"telegramId": message.from_user.id}
+    
+    try:
+        # Отправка запроса на удаление аккаунта
+        response = await make_request(
+            requests.delete,
+            f'{BASE_URL}/delete',
+            json=data
+        )
+        response.raise_for_status()
+        
+        await message.reply(
+            'Ваш аккаунт успешно удалён!\n<b>Чтобы зарегистрироваться снова, нажмите /start</b>',
+            parse_mode='html'
+        )
+        logger.info(f"Пользователь {message.from_user.id} успешно удалён.")
+    except requests.HTTPError as e:
+        status_code = e.response.status_code
+        response_text = e.response.text
+        logger.error(f"HTTP ошибка при удалении пользователя {message.from_user.id}: {status_code} - {response_text}")
+        await message.reply(
+            f'Ошибка удаления пользователя: {status_code} - {response_text}',
+            parse_mode='html'
+        )
+    except requests.RequestException as e:
+        logger.error(f"Ошибка при удалении пользователя {message.from_user.id}: {e}")
+        await message.reply(
+            f'Сервер не отвечает.\n<b>Ошибка удаления пользователя: {e}</b>',
+            parse_mode='html'
+        )
 
 # ==========================
 # Маршруты FastAPI
