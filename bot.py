@@ -1,99 +1,96 @@
 import asyncio
 import logging
 import os
-from datetime import datetime
+from contextlib import asynccontextmanager
 
 import requests
 import uvicorn
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
-                           WebAppInfo)
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from dotenv import load_dotenv  # For local development
-from fastapi import FastAPI, HTTPException, Request
+from dotenv import load_dotenv
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-# Load environment variables from .env file (for local development)
+# Загрузка переменных окружения из .env файла
 load_dotenv()
 
 # ==========================
-# Configuration and Settings
+# Конфигурация и Настройки
 # ==========================
 
-# Fetch environment variables for security
 API_TOKEN = os.getenv('API_TOKEN')
 BASE_URL = os.getenv('BASE_URL')
-PORT = int(os.getenv('PORT', 8000))  # Provide a default port if not set
+PORT = int(os.getenv('PORT', 8000))
 WEBHOOK_PATH = "/webhook"
 
-# Construct WEBHOOK_URL correctly
-RENDER_EXTERNAL_HOSTNAME = os.getenv('RENDER_EXTERNAL_HOSTNAME')  # Automatically set by Render
+# Конструируем WEBHOOK_URL
+RENDER_EXTERNAL_HOSTNAME = os.getenv('RENDER_EXTERNAL_HOSTNAME')
 if RENDER_EXTERNAL_HOSTNAME:
-    # Ensure RENDER_EXTERNAL_HOSTNAME does not include 'http://' or 'https://'
     if RENDER_EXTERNAL_HOSTNAME.startswith("http://") or RENDER_EXTERNAL_HOSTNAME.startswith("https://"):
         RENDER_EXTERNAL_HOSTNAME = RENDER_EXTERNAL_HOSTNAME.split("://")[1]
     WEBHOOK_URL = f"https://{RENDER_EXTERNAL_HOSTNAME}{WEBHOOK_PATH}"
 else:
-    # Fallback for local development
-    WEBHOOK_URL = os.getenv('WEBHOOK_URL', f"http://localhost:{PORT}{WEBHOOK_PATH}")
+    # Для локальной разработки используйте ngrok URL если необходимо
+    WEBHOOK_URL = os.getenv('WEBHOOK_URL', "")
 
 # ==========================
-# Initialize Bot and Dispatcher
+# Инициализация Бота и Диспетчера
 # ==========================
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
 # ==========================
-# Logging Configuration
+# Конфигурация Логирования
 # ==========================
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ==========================
-# Initialize Scheduler
+# Инициализация Планировщика
 # ==========================
 
 scheduler = AsyncIOScheduler()
 
 # ==========================
-# Initialize FastAPI
+# Инициализация FastAPI с Lifespan
 # ==========================
 
-app = FastAPI()
+app = FastAPI(lifespan=lambda app: lifespan(app))
 
 # ==========================
-# Utility Functions
+# Переменная для состояния уведомлений
+# ==========================
+notifications_enabled = True  # Флаг для включения/выключения уведомлений
+
+# ==========================
+# Вспомогательные Функции
 # ==========================
 
 async def make_request(func, *args, **kwargs):
-    """
-    Helper function to run synchronous HTTP requests in an executor.
-    """
     loop = asyncio.get_event_loop()
     try:
         return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
     except Exception as e:
-        logger.error(f"Error in make_request: {e}")
+        logger.error(f"Ошибка в make_request: {e}")
         raise
 
 async def get_all_users():
-    """
-    Fetch all users from the backend API asynchronously.
-    """
     try:
         response = await make_request(requests.get, f"{BASE_URL}/users")
         response.raise_for_status()
-        return response.json()  # Assuming API returns list of user dictionaries
+        return response.json()
     except requests.RequestException as e:
-        logger.error(f"Failed to fetch users: {e}")
+        logger.error(f"Не удалось получить пользователей: {e}")
         return []
 
 async def notify_user(telegram_id):
-    """
-    Send a notification to a single user.
-    """
+    if not notifications_enabled:
+        logger.info("Уведомления отключены. Пропускаем отправку уведомления.")
+        return
+    
     webAppKeyboard = WebAppInfo(url="https://desks-duels.netlify.app/")
     keyboard = InlineKeyboardMarkup().add(
         InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
@@ -105,18 +102,19 @@ async def notify_user(telegram_id):
             "Готовься к битве, она состоится через 5 минут!",
             reply_markup=keyboard
         )
-        logger.info(f"Notification sent to user {telegram_id}")
+        logger.info(f"Уведомление отправлено пользователю {telegram_id}")
     except Exception as e:
-        logger.error(f"Error sending notification to user {telegram_id}: {e}")
+        logger.error(f"Ошибка отправки уведомления пользователю {telegram_id}: {e}")
 
 async def send_notifications():
-    """
-    Send notifications to all users.
-    """
+    if not notifications_enabled:
+        logger.info("Уведомления отключены. Пропускаем отправку уведомлений.")
+        return
+
     try:
         users = await get_all_users()
         if not users:
-            logger.warning("No users to notify.")
+            logger.warning("Нет пользователей для уведомления.")
             return
         
         tasks = []
@@ -125,26 +123,22 @@ async def send_notifications():
             if telegram_id:
                 tasks.append(notify_user(telegram_id))
             else:
-                logger.warning(f"User data missing 'telegramId': {user}")
+                logger.warning(f"Данные пользователя без 'telegramId': {user}")
         
         if tasks:
             await asyncio.gather(*tasks)
     except Exception as e:
-        logger.error(f"Error in send_notifications: {e}")
+        logger.error(f"Ошибка в send_notifications: {e}")
 
 def schedule_notifications():
-    """
-    Schedule notifications at specified lesson end times.
-    """
-    # Define lesson end times (hour, minute) - adjust as needed
     lesson_times = [
-        ("07:35", send_notifications),  # Before 1st lesson ends at 8:40
-        ("09:25", send_notifications),  # Before 2nd lesson ends at 9:30
-        ("10:15", send_notifications),  # Before 3rd lesson ends at 10:20
-        ("11:15", send_notifications),  # Before 4th lesson ends at 11:20
-        ("12:15", send_notifications),  # Before 5th lesson ends at 12:20
-        ("13:05", send_notifications),  # Before 6th lesson ends at 13:10
-        ("13:55", send_notifications),  # Before 7th lesson ends at 14:00
+        ("07:35", send_notifications),
+        ("09:25", send_notifications),
+        ("10:15", send_notifications),
+        ("11:15", send_notifications),
+        ("12:15", send_notifications),
+        ("13:05", send_notifications),
+        ("13:55", send_notifications),
     ]
 
     for time_str, job in lesson_times:
@@ -157,15 +151,15 @@ def schedule_notifications():
             day_of_week="mon-fri",
             id=f"notification_{hour}_{minute}"
         )
-        logger.info(f"Scheduled notification at {hour}:{minute} on weekdays")
+        logger.info(f"Запланировано уведомление в {hour}:{minute} по будням")
 
 # ==========================
-# Bot Command Handlers
+# Обработчики Команд Бота
 # ==========================
 
 @dp.message_handler(commands=['start'])
 async def start_command(message: types.Message):
-    logger.info(f"User {message.from_user.id} started the bot.")
+    logger.info(f"Пользователь {message.from_user.id} запустил бота.")
     user_data = {
         "telegramId": str(message.from_user.id),
         "username": message.from_user.username,
@@ -176,7 +170,6 @@ async def start_command(message: types.Message):
         InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
     )
     
-    # Send registration request to the backend
     try:
         response = await make_request(
             requests.post,
@@ -184,10 +177,10 @@ async def start_command(message: types.Message):
             json=user_data
         )
         response.raise_for_status()
-        logger.info(f"User {message.from_user.id} registered successfully.")
+        logger.info(f"Пользователь {message.from_user.id} успешно зарегистрирован.")
     except requests.RequestException as e:
-        logger.error(f"Error registering user {message.from_user.id}: {e}")
-        await message.reply("Произошла ошибка при регистрации. Попробуйте снова позже.")
+        logger.error(f"Ошибка регистрации пользователя {message.from_user.id}: {e}")
+        await message.reply("Произошла ошибка при регистрации. Попробуйте позже.")
         return
     
     welcome_text = (
@@ -198,67 +191,57 @@ async def start_command(message: types.Message):
     
     await message.reply(welcome_text, reply_markup=keyboard, parse_mode='html')
 
-@dp.message_handler(commands=['restart'])
-async def delete_user(message: types.Message):
-    logger.info(f"User {message.from_user.id} requested account deletion.")
-    data = {"telegramId": message.from_user.id}
-    try:
-        response = await make_request(
-            requests.delete,
-            f'{BASE_URL}/delete',
-            json=data
-        )
-        response.raise_for_status()
-        await message.reply(
-            'Ваш аккаунт успешно удалён!\n<b>Чтобы зарегистрироваться нажмите /start</b>',
-            parse_mode='html'
-        )
-        logger.info(f"User {message.from_user.id} deleted successfully.")
-    except requests.RequestException as e:
-        logger.error(f"Error deleting user {message.from_user.id}: {e}")
-        await message.reply(
-            f'Сервер не отвечает.\n<b>Ошибка удаления пользователя: {e}</b>',
-            parse_mode='html'
-        )
+@dp.message_handler(commands=['notify'])
+async def toggle_notifications(message: types.Message):
+    global notifications_enabled
+    notifications_enabled = not notifications_enabled  # Переключаем состояние флага
+    
+    if notifications_enabled:
+        await message.reply("Уведомления включены. Вы будете получать уведомления.")
+        logger.info(f"Пользователь {message.from_user.id} включил уведомления.")
+    else:
+        await message.reply("Уведомления отключены. Вы больше не будете получать уведомления.")
+        logger.info(f"Пользователь {message.from_user.id} отключил уведомления.")
 
 # ==========================
-# FastAPI Routes
+# Маршруты FastAPI
 # ==========================
 
 @app.get("/health")
 async def health_check():
-    """
-    Health check endpoint for Render.
-    """
     return JSONResponse(content={"status": "ok"}, status_code=200)
 
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
     try:
         update_data = await request.json()
-        logger.info(f"Received webhook update: {update_data}")  # Log the update data
+        logger.info(f"Получено обновление вебхука: {update_data}")
+        
         update = types.Update(**update_data)
+        
+        Dispatcher.set_current(dp)
+        Bot.set_current(bot)
+        
         await dp.process_update(update)
+        
         return JSONResponse(content={"status": "ok"}, status_code=200)
     except Exception as e:
-        logger.error(f"Failed to process update: {e}")
+        logger.error(f"Не удалось обработать обновление: {e}")
         return JSONResponse(content={"status": "error", "message": str(e)}, status_code=400)
 
 # ==========================
 # Lifespan Event Handlers
 # ==========================
 
-@app.on_event("startup")
-async def on_startup_event():
-    """
-    Actions to perform on startup.
-    """
-    logger.info("Starting up the bot and scheduler...")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Действия при запуске
+    logger.info("Запуск бота и планировщика...")
     schedule_notifications()
     scheduler.start()
-    logger.info("Scheduler started.")
+    logger.info("Планировщик запущен.")
     
-    # Set webhook
+    # Установка вебхука
     try:
         response = await make_request(
             requests.post,
@@ -266,35 +249,32 @@ async def on_startup_event():
             json={"url": WEBHOOK_URL}
         )
         response.raise_for_status()
-        logger.info(f"Webhook set to {WEBHOOK_URL}")
+        logger.info(f"Вебхук установлен на {WEBHOOK_URL}")
     except requests.RequestException as e:
-        logger.error(f"Failed to set webhook: {e}")
-
-@app.on_event("shutdown")
-async def on_shutdown_event():
-    """
-    Actions to perform on shutdown.
-    """
-    logger.info("Shutting down bot and scheduler...")
+        logger.error(f"Не удалось установить вебхук: {e}")
+    
+    yield
+    
+    # Действия при завершении
+    logger.info("Завершение работы бота и планировщика...")
     await bot.close()
     scheduler.shutdown()
-    logger.info("Bot and scheduler shut down.")
+    logger.info("Бот и планировщик остановлены.")
     
-    # Remove webhook
+    # Удаление вебхука
     try:
         response = await make_request(
             requests.post,
             f'https://api.telegram.org/bot{API_TOKEN}/deleteWebhook'
         )
         response.raise_for_status()
-        logger.info("Webhook deleted successfully.")
+        logger.info("Вебхук успешно удалён.")
     except requests.RequestException as e:
-        logger.error(f"Failed to delete webhook: {e}")
+        logger.error(f"Не удалось удалить вебхук: {e}")
 
 # ==========================
-# Main Entry Point
+# Запуск Приложения
 # ==========================
 
 if __name__ == '__main__':
-    # Run the FastAPI app with Uvicorn
     uvicorn.run("bot:app", host="0.0.0.0", port=PORT, log_level="info")
