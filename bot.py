@@ -3,8 +3,8 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-import requests
 import aiohttp
+import requests
 import uvicorn
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
@@ -75,8 +75,8 @@ async def make_request(method, *args, **kwargs):
     try:
         logger.info(f"Received HTTP method: {method}")
 
-        if isinstance(method, str):
-            method = method.upper()  
+        if not isinstance(method, str):
+            method = method.__name__.upper()
         else:
             raise ValueError("The 'method' argument should be a string representing an HTTP method.")
         
@@ -91,7 +91,7 @@ async def make_request(method, *args, **kwargs):
 
 async def get_all_users():
     try:
-        response = await make_request(requests.get, f"{BASE_URL}/users")
+        response = await make_request("GET", f"{BASE_URL}/users")
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
@@ -184,10 +184,11 @@ async def start_command(message: types.Message):
     
     try:
         response = await make_request(
-            requests.post,
-            f'{BASE_URL}/register',
+            "POST",
+            f"{BASE_URL}/register",
             json=user_data
         )
+
         response.raise_for_status()  # Will raise an exception for 4xx/5xx status codes
         logger.info(f"Пользователь {message.from_user.id} успешно зарегистрирован.")
     except requests.RequestException as e:
@@ -223,10 +224,11 @@ async def delete_user(message: types.Message):
     try:
         # Отправка запроса на удаление аккаунта
         response = await make_request(
-            requests.delete,
-            f'{BASE_URL}/delete',
+            "DELETE",
+            f"{BASE_URL}/delete",
             json=data
         )
+
         response.raise_for_status()
         
         await message.reply(
@@ -290,10 +292,11 @@ async def lifespan(app: FastAPI):
     # Установка вебхука
     try:
         response = await make_request(
-            requests.post,
+            "POST",
             f'https://api.telegram.org/bot{API_TOKEN}/setWebhook',
             json={"url": WEBHOOK_URL}
         )
+
         response.raise_for_status()
         logger.info(f"Вебхук установлен на {WEBHOOK_URL}")
     except requests.RequestException as e:
@@ -310,9 +313,10 @@ async def lifespan(app: FastAPI):
     # Удаление вебхука
     try:
         response = await make_request(
-            requests.post,
+            "POST",
             f'https://api.telegram.org/bot{API_TOKEN}/deleteWebhook'
         )
+
         response.raise_for_status()
         logger.info("Вебхук успешно удалён.")
     except requests.RequestException as e:
