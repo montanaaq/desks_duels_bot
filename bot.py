@@ -201,8 +201,7 @@ async def start_command(message: types.Message):
         "Это захватывающая игра, где ты можешь наконец-то занять место в классе\n"
         "\n👇 <b>Нажми на кнопку ниже, чтобы начать игру</b> 👇"
     )
-    
-    await message.reply(welcome_text, reply_markup=keyboard, parse_mode='html')
+    await bot.send_message(chat_id=message.from_user.id, text=welcome_text, reply_markup=make_request, parse_mode='html')
 
 @dp.message_handler(commands=['notify'])
 async def toggle_notifications(message: types.Message):
