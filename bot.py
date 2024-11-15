@@ -4,9 +4,11 @@ import os
 from contextlib import asynccontextmanager
 
 import requests
+import aiohttp
 import uvicorn
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
+                           WebAppInfo)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -70,9 +72,11 @@ notifications_enabled = True  # Флаг для включения/выключ�
 # ==========================
 
 async def make_request(func, *args, **kwargs):
-    loop = asyncio.get_event_loop()
     try:
-        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+        async with aiohttp.ClientSession() as session:
+            async with session.request(func, *args, **kwargs) as response:
+                response.raise_for_status()
+                return await response.json()
     except Exception as e:
         logger.error(f"Ошибка в make_request: {e}")
         raise
@@ -176,12 +180,12 @@ async def start_command(message: types.Message):
             f'{BASE_URL}/register',
             json=user_data
         )
-        response.raise_for_status()
+        response.raise_for_status()  # Will raise an exception for 4xx/5xx status codes
         logger.info(f"Пользователь {message.from_user.id} успешно зарегистрирован.")
     except requests.RequestException as e:
         logger.error(f"Ошибка регистрации пользователя {message.from_user.id}: {e}")
         await message.reply("Произошла ошибка при регистрации. Попробуйте позже.")
-        return
+        return  # Return early to avoid further actions
     
     welcome_text = (
         f"Привет, <b>{message.from_user.first_name}</b>! Добро пожаловать в 🎉 <b>Desks Duels</b> 🎉 \n"
