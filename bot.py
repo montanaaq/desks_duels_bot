@@ -71,10 +71,10 @@ notifications_enabled = True  # Флаг для включения/выключ�
 # Вспомогательные Функции
 # ==========================
 
-async def make_request(func, *args, **kwargs):
+async def make_request(method, *args, **kwargs):
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.request(func, *args, **kwargs) as response:
+            async with session.request(method.upper(), *args, **kwargs) as response:
                 response.raise_for_status()
                 return await response.json()
     except Exception as e:
