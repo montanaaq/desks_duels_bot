@@ -73,13 +73,19 @@ notifications_enabled = True  # Флаг для включения/выключ�
 
 async def make_request(method, *args, **kwargs):
     try:
+        if isinstance(method, str):
+            method = method.upper()  
+        else:
+            raise ValueError("The 'method' argument should be a string representing an HTTP method.")
+        
         async with aiohttp.ClientSession() as session:
-            async with session.request(method.upper(), *args, **kwargs) as response:
+            async with session.request(method, *args, **kwargs) as response:
                 response.raise_for_status()
                 return await response.json()
     except Exception as e:
         logger.error(f"Ошибка в make_request: {e}")
         raise
+
 
 async def get_all_users():
     try:
