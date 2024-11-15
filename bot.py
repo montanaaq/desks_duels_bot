@@ -75,7 +75,7 @@ async def make_request(method, *args, **kwargs):
     try:
         logger.info(f"Received HTTP method: {method}")
 
-        if not isinstance(method, str):
+        if isinstance(method, str):
             method = method.upper()
         else:
             raise ValueError("The 'method' argument should be a string representing an HTTP method.")
@@ -84,9 +84,13 @@ async def make_request(method, *args, **kwargs):
             async with session.request(method, *args, **kwargs) as response:
                 response.raise_for_status()
                 return await response.json()
-    except Exception as e:
-        logger.error(f"Ошибка в make_request: {e}")
+    except aiohttp.ClientError as e:
+        logger.error(f"HTTP ошибка в make_request: {e}")
         raise
+    except Exception as e:
+        logger.error(f"Неизвестная ошибка в make_request: {e}")
+        raise
+
 
 
 async def get_all_users():
