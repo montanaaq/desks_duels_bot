@@ -34,7 +34,7 @@ if RENDER_EXTERNAL_HOSTNAME:
     WEBHOOK_URL = f"https://{RENDER_EXTERNAL_HOSTNAME}{WEBHOOK_PATH}"
 else:
     # Для локальной разработки используйте ngrok URL если необходимо
-    WEBHOOK_URL = os.getenv('WEBHOOK_URL', "https://abcd1234.ngrok.io/webhook")  # Замените на ваш реальный ngrok URL
+    WEBHOOK_URL = os.getenv('WEBHOOK_URL', "https://6f06-95-26-82-58.ngrok-free.app/webhook")  # Замените на ваш реальный ngrok URL
 
 # ==========================
 # Инициализация Бота и Диспетчера
@@ -80,7 +80,7 @@ async def make_request(method, *args, **kwargs):
         else:
             raise ValueError("The 'method' argument should be a string representing an HTTP method.")
         
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(verify_ssl=False)) as session:
             async with session.request(method, *args, **kwargs) as response:
                 print(response)
                 if 'application/json' in response.headers.get('Content-Type', ''):
@@ -179,12 +179,16 @@ def schedule_notifications():
 async def start_command(message: types.Message):
     logger.info(f"Пользователь {message.from_user.id} запустил бота.")
     
-    # Получаем список всех пользователей
-    users = await get_all_users()
-    
-    # Проверяем, есть ли пользователь уже в базе данных
-    for user in users:
-        if user.get('telegramId') == str(message.from_user.id):
+    try:
+        # Проверяем, есть ли пользователь уже в базе данных
+        response = requests.post(
+            f"{BASE_URL}/auth/check",
+            json={"telegramId": str(message.from_user.id)}
+        )
+        response.raise_for_status()
+        user = response.json()
+        
+        if user:
             logger.info(f"Пользователь {message.from_user.id} уже зарегистрирован.")
             
             # Отправляем сообщение с Telegram Web App на ваше приложение
@@ -198,6 +202,8 @@ async def start_command(message: types.Message):
                 reply_markup=keyboard
             )
             return
+    except requests.RequestException as e:
+        logger.error(f"Ошибка проверки пользователя {message.from_user.id}: {e}")
     
     # Если пользователь не найден, регистрируем его
     user_data = {
@@ -207,13 +213,12 @@ async def start_command(message: types.Message):
     }
     
     try:
-        response = await make_request(
-            "POST",
+        response = requests.post(
             f"{BASE_URL}/auth/register",
             json=user_data
         )
+        response.raise_for_status()
 
-        print(response)
         logger.info(f"Пользователь {message.from_user.id} успешно зарегистрирован.")
         
         # Отправляем сообщение с Telegram Web App на ваше приложение
@@ -230,7 +235,7 @@ async def start_command(message: types.Message):
     except requests.RequestException as e:
         logger.error(f"Ошибка регистрации пользователя {message.from_user.id}: {e}")
         await message.reply("Произошла ошибка при регистрации. Попробуйте позже.")
-
+        
 @dp.message_handler(commands=['notify'])
 async def toggle_notifications(message: types.Message):
     global notifications_enabled
@@ -290,8 +295,6 @@ async def health_check():
 async def telegram_webhook(request: Request):
     try:
         update_data = await request.json()
-        logger.info(f"Получено обновление вебхука: {update_data}")
-        
         update = types.Update(**update_data)
         
         Dispatcher.set_current(dp)
