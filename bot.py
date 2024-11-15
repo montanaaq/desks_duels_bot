@@ -82,7 +82,7 @@ async def make_request(method, *args, **kwargs):
         
         async with aiohttp.ClientSession() as session:
             async with session.request(method, *args, **kwargs) as response:
-                response.raise_for_status()
+                print(response)
                 return await response.json()
     except aiohttp.ClientError as e:
         logger.error(f"HTTP ошибка в make_request: {e}")
@@ -96,7 +96,7 @@ async def make_request(method, *args, **kwargs):
 async def get_all_users():
     try:
         response = await make_request("GET", f"{BASE_URL}/users")
-        response.raise_for_status()
+        print(response)
         return response.json()
     except requests.RequestException as e:
         logger.error(f"Не удалось получить пользователей: {e}")
@@ -193,7 +193,7 @@ async def start_command(message: types.Message):
             json=user_data
         )
 
-        response.raise_for_status()  # Will raise an exception for 4xx/5xx status codes
+        print(response)
         logger.info(f"Пользователь {message.from_user.id} успешно зарегистрирован.")
     except requests.RequestException as e:
         logger.error(f"Ошибка регистрации пользователя {message.from_user.id}: {e}")
@@ -232,7 +232,7 @@ async def delete_user(message: types.Message):
             json=data
         )
 
-        response.raise_for_status()
+        print(response)
         
         await message.reply(
             'Ваш аккаунт успешно удалён!\n<b>Чтобы зарегистрироваться снова, нажмите /start</b>',
@@ -299,8 +299,7 @@ async def lifespan(app: FastAPI):
             f'https://api.telegram.org/bot{API_TOKEN}/setWebhook',
             json={"url": WEBHOOK_URL}
         )
-
-        response.raise_for_status()
+        print(response)
         logger.info(f"Вебхук установлен на {WEBHOOK_URL}")
     except requests.RequestException as e:
         logger.error(f"Не удалось установить вебхук: {e}")
@@ -319,8 +318,7 @@ async def lifespan(app: FastAPI):
             "POST",
             f'https://api.telegram.org/bot{API_TOKEN}/deleteWebhook'
         )
-
-        response.raise_for_status()
+        print(response)
         logger.info("Вебхук успешно удалён.")
     except requests.RequestException as e:
         logger.error(f"Не удалось удалить вебхук: {e}")
