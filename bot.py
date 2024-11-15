@@ -176,15 +176,33 @@ def schedule_notifications():
 @dp.message_handler(commands=['start'])
 async def start_command(message: types.Message):
     logger.info(f"Пользователь {message.from_user.id} запустил бота.")
+    
+    # Получаем список всех пользователей
+    users = await get_all_users()
+    
+    # Проверяем, есть ли пользователь уже в базе данных
+    for user in users:
+        if user.get('telegramId') == str(message.from_user.id):
+            logger.info(f"Пользователь {message.from_user.id} уже зарегистрирован.")
+            
+            # Отправляем сообщение с Telegram Web App на ваше приложение
+            webAppKeyboard = WebAppInfo(url="https://desks-duels.netlify.app/")
+            keyboard = InlineKeyboardMarkup().add(
+                InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
+            )
+            await bot.send_message(
+                chat_id=message.from_user.id, 
+                text="Вы уже зарегистрированы! Нажмите на кнопку ниже, чтобы перейти в приложение.", 
+                reply_markup=keyboard
+            )
+            return
+    
+    # Если пользователь не найден, регистрируем его
     user_data = {
         "telegramId": str(message.from_user.id),
         "username": message.from_user.username,
         "firstName": message.from_user.first_name
     }
-    webAppKeyboard = WebAppInfo(url="https://desks-duels.netlify.app/")
-    keyboard = InlineKeyboardMarkup().add(
-        InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
-    )
     
     try:
         response = await make_request(
@@ -195,17 +213,21 @@ async def start_command(message: types.Message):
 
         print(response)
         logger.info(f"Пользователь {message.from_user.id} успешно зарегистрирован.")
+        
+        # Отправляем сообщение с Telegram Web App на ваше приложение
+        webAppKeyboard = WebAppInfo(url="https://desks-duels.netlify.app/")
+        keyboard = InlineKeyboardMarkup().add(
+            InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
+        )
+        welcome_text = (
+            f"Привет, <b>{message.from_user.first_name}</b>! Добро пожаловать в 🎉 <b>Desks Duels</b> 🎉 \n"
+            "Это захватывающая игра, где ты можешь наконец-то занять место в классе\n"
+            "\n👇 <b>Нажми на кнопку ниже, чтобы начать игру</b> 👇"
+        )
+        await bot.send_message(chat_id=message.from_user.id, text=welcome_text, reply_markup=keyboard, parse_mode='html')
     except requests.RequestException as e:
         logger.error(f"Ошибка регистрации пользователя {message.from_user.id}: {e}")
         await message.reply("Произошла ошибка при регистрации. Попробуйте позже.")
-        return  # Return early to avoid further actions
-    
-    welcome_text = (
-        f"Привет, <b>{message.from_user.first_name}</b>! Добро пожаловать в 🎉 <b>Desks Duels</b> 🎉 \n"
-        "Это захватывающая игра, где ты можешь наконец-то занять место в классе\n"
-        "\n👇 <b>Нажми на кнопку ниже, чтобы начать игру</b> 👇"
-    )
-    await bot.send_message(chat_id=message.from_user.id, text=welcome_text, reply_markup=keyboard, parse_mode='html')
 
 @dp.message_handler(commands=['notify'])
 async def toggle_notifications(message: types.Message):
