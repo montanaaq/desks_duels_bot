@@ -83,15 +83,17 @@ async def make_request(method, *args, **kwargs):
         async with aiohttp.ClientSession() as session:
             async with session.request(method, *args, **kwargs) as response:
                 print(response)
-                return await response.json()
+                if 'application/json' in response.headers.get('Content-Type', ''):
+                    return await response.json()
+                else:
+                    logger.warning(f"Non-JSON response received: {response.headers.get('Content-Type')}")
+                    return await response.text()
     except aiohttp.ClientError as e:
         logger.error(f"HTTP ошибка в make_request: {e}")
         raise
     except Exception as e:
         logger.error(f"Неизвестная ошибка в make_request: {e}")
         raise
-
-
 
 async def get_all_users():
     try:
