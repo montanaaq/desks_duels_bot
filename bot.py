@@ -73,6 +73,8 @@ notifications_enabled = True  # Флаг для включения/выключ�
 
 async def make_request(method, *args, **kwargs):
     try:
+        logger.info(f"Received HTTP method: {method}")
+
         if isinstance(method, str):
             method = method.upper()  
         else:
