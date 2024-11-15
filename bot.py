@@ -76,7 +76,7 @@ async def make_request(method, *args, **kwargs):
         logger.info(f"Received HTTP method: {method}")
 
         if not isinstance(method, str):
-            method = method.__name__.upper()
+            method = method.upper()
         else:
             raise ValueError("The 'method' argument should be a string representing an HTTP method.")
         
