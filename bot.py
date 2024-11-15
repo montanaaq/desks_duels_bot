@@ -209,7 +209,7 @@ async def start_command(message: types.Message):
     try:
         response = await make_request(
             "POST",
-            f"{BASE_URL}/register",
+            f"{BASE_URL}/auth/register",
             json=user_data
         )
 
@@ -252,7 +252,7 @@ async def delete_user(message: types.Message):
         # Отправка запроса на удаление аккаунта
         response = await make_request(
             "DELETE",
-            f"{BASE_URL}/delete",
+            f"{BASE_URL}/auth/delete",
             json=data
         )
 
