@@ -311,44 +311,42 @@ async def telegram_webhook(request: Request):
 # Lifespan Event Handlers
 # ==========================
 
+async def ping_server():
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"https://{RENDER_EXTERNAL_HOSTNAME}/health") as response:
+                if response.status == 200:
+                    logger.info("Keep-alive ping successful")
+                else:
+                    logger.warning(f"Keep-alive ping failed with status {response.status}")
+    except Exception as e:
+        logger.error(f"Keep-alive ping error: {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Действия при запуске
-    logger.info("Запуск бота и планировщика...")
-    schedule_notifications()
-    scheduler.start()
-    logger.info("Планировщик запущен.")
+    # Инициализация планировщика
+    scheduler = AsyncIOScheduler()
     
-    # Установка вебхука
-    try:
-        response = await make_request(
-            "POST",
-            f'https://api.telegram.org/bot{API_TOKEN}/setWebhook',
-            json={"url": WEBHOOK_URL}
-        )
-        print(response)
-        logger.info(f"Вебхук установлен на {WEBHOOK_URL}")
-    except requests.RequestException as e:
-        logger.error(f"Не удалось установить вебхук: {e}")
+    # Добавляем задачу для отправки уведомлений
+    schedule_notifications()
+    
+    # Добавляем задачу для пинга сервера каждые 14 минут
+    scheduler.add_job(ping_server, 'interval', minutes=14)
+    
+    # Запускаем планировщик
+    scheduler.start()
+    
+    # Настраиваем вебхук
+    webhook_info = await bot.get_webhook_info()
+    if webhook_info.url != WEBHOOK_URL:
+        await bot.set_webhook(url=WEBHOOK_URL)
+        logger.info(f"Webhook установлен на {WEBHOOK_URL}")
     
     yield
     
-    # Действия при завершении
-    logger.info("Завершение работы бота и планировщика...")
-    await bot.close()
+    # Очистка
     scheduler.shutdown()
-    logger.info("Бот и планировщик остановлены.")
-    
-    # Удаление вебхука
-    try:
-        response = await make_request(
-            "POST",
-            f'https://api.telegram.org/bot{API_TOKEN}/deleteWebhook'
-        )
-        print(response)
-        logger.info("Вебхук успешно удалён.")
-    except requests.RequestException as e:
-        logger.error(f"Не удалось удалить вебхук: {e}")
+    await bot.session.close()
 
 # ==========================
 # Запуск Приложения
