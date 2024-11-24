@@ -291,6 +291,27 @@ async def delete_user(message: types.Message):
 async def health_check():
     return JSONResponse(content={"status": "ok"}, status_code=200)
 
+@app.get("/webhook/status")
+async def webhook_status():
+    try:
+        # Получаем информацию о текущем вебхуке
+        webhook_info = await bot.get_webhook_info()
+        
+        return {
+            "url": webhook_info.url,
+            "is_set": bool(webhook_info.url),
+            "pending_update_count": webhook_info.pending_update_count,
+            "last_error_date": webhook_info.last_error_date,
+            "last_error_message": webhook_info.last_error_message,
+            "max_connections": webhook_info.max_connections
+        }
+    except Exception as e:
+        logger.error(f"Error checking webhook status: {e}")
+        return JSONResponse(
+            status_code=500, 
+            content={"error": "Failed to retrieve webhook status"}
+        )
+
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
     try:
