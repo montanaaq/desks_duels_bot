@@ -369,6 +369,11 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
     await bot.session.close()
 
+@dp.message_handler(content_types=['text'])
+async def func(message: types.Message):
+    if message.text not in ['/start', '/restart', '/notify']:
+        await message.reply('Я не понимаю, что вы хотите сделать. Воспользуйтесь командой /start для начала работы с ботом.')
+
 # ==========================
 # Запуск Приложения
 # ==========================
