@@ -186,6 +186,26 @@ async def start_command(message: types.Message):
             json={"telegramId": str(message.from_user.id)}
         )
         response.raise_for_status()
+        
+        # Create a loading animation
+        loading_messages = [
+            "Проверка пользователя.",
+            "Проверка пользователя..",
+            "Проверка пользователя...",
+            "Проверка пользователя....",
+        ]
+        
+        # Send loading animation with progressive dots
+        for message_text in loading_messages:
+            await bot.send_message(
+                chat_id=message.from_user.id, 
+                text=message_text
+            )
+            await asyncio.sleep(0.5)  # Short delay between messages
+        
+        # Edit the last message to remove the animation
+        await message.edit_text(text="Проверка завершена ✅")
+        
         user = response.json()
         
         if user:
