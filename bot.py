@@ -33,48 +33,57 @@ async def connect_to_socket():
     await sio.connect(url=BASE_URL)
     logger.info('Подключено к сокетам')
 
+# Добавим глобальную переменную для хранения ID текущего пользователя
+CURRENT_USER_ID = None
+
 @sio.event
 async def duelRequest(data):
-    telegram_id = data.get('challengedId')
+    global CURRENT_USER_ID
+    telegram_id = str(data.get('challengedId'))
     challenger_name = data.get('challengerName')
     
-    # Добавляем логирование для отладки
-    logger.info(f'Получены данные о дуэли: {data}')
-    logger.info(f'ID получателя: {telegram_id}, имя вызывающего: {challenger_name}')
-
-    # Создаем клавиатуру с кнопкой для перехода в приложение
-    webAppKeyboard = WebAppInfo(url="https://desks-duels.netlify.app/")
-    keyboard = InlineKeyboardMarkup().add(
-        InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
-    )
-
-    if telegram_id:
+    # Подробное логирование для отладки
+    logger.info('==================== НОВЫЙ ВЫЗОВ НА ДУЭЛЬ ====================')
+    logger.info(f'Получены данные: {data}')
+    logger.info(f'ID получателя: {telegram_id}')
+    logger.info(f'Текущий пользователь: {CURRENT_USER_ID}')
+    logger.info(f'Имя вызывающего: {challenger_name}')
+    
+    # Проверяем совпадение ID
+    if telegram_id == CURRENT_USER_ID:
+        logger.info('ID СОВПАДАЮТ! Отправляем уведомление...')
+        
+        webAppKeyboard = WebAppInfo(url="https://desks-duels.netlify.app/")
+        keyboard = InlineKeyboardMarkup().add(
+            InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
+        )
+        
         try:
             await bot.send_message(
-                chat_id=telegram_id,  # Явно указываем chat_id
-                text=f"Пользователь: <b>{challenger_name}</b> вызвал вас на дуэль, зайдите в игру, чтобы не потерять своё место!",
+                chat_id=telegram_id,
+                text=f"🎯 Вызов на дуэль!\nПользователь <b>{challenger_name}</b> вызвал вас на дуэль!\nСкорее переходите в приложение, чтобы принять вызов! ⚔️",
                 reply_markup=keyboard,
                 parse_mode='html'
             )
-            logger.info(f'Сообщение успешно отправлено пользователю {telegram_id}')
+            logger.info('✅ Сообщение успешно отправлено!')
         except Exception as e:
-            logger.error(f'Ошибка отправки сообщения: {e}')
+            logger.error(f'❌ Ошибка отправки сообщения: {e}')
     else:
-        logger.error('Не получен telegram_id в данных дуэли')
+        logger.info('ID не совпадают, пропускаем...')
 
 # Добавим обработчик подключения для уверенности, что сокеты работают
 @sio.event
 async def connect():
-    logger.info('Соединение с сокет-сервером установлено')
+    logger.info('🟢 Соединение с сокет-сервером установлено')
 
 @sio.event
 async def disconnect():
-    logger.info('Соединение с сокет-сервером разорвано')
+    logger.info('🔴 Соединение с сокет-сервером разорвано')
 
 # Добавим обработчик ошибок сокетов
 @sio.event
-async def connect_error(data):
-    logger.error(f'Ошибка подключения к сокет-серверу: {data}')
+async def connect_error(error):
+    logger.error(f'⚠️ Ошибка подключения к сокет-серверу: {error}')
 
 # Конструируем WEBHOOK_URL
 RENDER_EXTERNAL_HOSTNAME = os.getenv('RENDER_EXTERNAL_HOSTNAME')
@@ -227,6 +236,9 @@ def schedule_notifications():
 
 @dp.message_handler(commands=['start'])
 async def start_command(message: types.Message):
+    global CURRENT_USER_ID
+    CURRENT_USER_ID = str(message.from_user.id)  # Сохраняем ID пользователя
+    logger.info(f"Текущий пользователь: {CURRENT_USER_ID}")
     logger.info(f"Пользователь {message.from_user.id} запустил бота.")
     
     try:
