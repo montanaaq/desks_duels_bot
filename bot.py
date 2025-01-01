@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 import aiohttp
 import requests
+import socketio
 import uvicorn
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
@@ -13,6 +14,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+
+sio = socketio.AsyncClient(ssl_verify=False)
 
 # Загрузка переменных окружения из .env файла
 load_dotenv()
@@ -25,6 +28,53 @@ API_TOKEN = os.getenv('API_TOKEN')
 BASE_URL = os.getenv('BASE_URL')
 PORT = int(os.getenv('PORT', 8000))
 WEBHOOK_PATH = "/webhook"
+
+async def connect_to_socket():
+    await sio.connect(url=BASE_URL)
+    logger.info('Подключено к сокетам')
+
+@sio.event
+async def duelRequest(data):
+    telegram_id = data.get('challengedId')
+    challenger_name = data.get('challengerName')
+    
+    # Добавляем логирование для отладки
+    logger.info(f'Получены данные о дуэли: {data}')
+    logger.info(f'ID получателя: {telegram_id}, имя вызывающего: {challenger_name}')
+
+    # Создаем клавиатуру с кнопкой для перехода в приложение
+    webAppKeyboard = WebAppInfo(url="https://desks-duels.netlify.app/")
+    keyboard = InlineKeyboardMarkup().add(
+        InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
+    )
+
+    if telegram_id:
+        try:
+            await bot.send_message(
+                chat_id=telegram_id,  # Явно указываем chat_id
+                text=f"Пользователь: <b>{challenger_name}</b> вызвал вас на дуэль, зайдите в игру, чтобы не потерять своё место!",
+                reply_markup=keyboard,
+                parse_mode='html'
+            )
+            logger.info(f'Сообщение успешно отправлено пользователю {telegram_id}')
+        except Exception as e:
+            logger.error(f'Ошибка отправки сообщения: {e}')
+    else:
+        logger.error('Не получен telegram_id в данных дуэли')
+
+# Добавим обработчик подключения для уверенности, что сокеты работают
+@sio.event
+async def connect():
+    logger.info('Соединение с сокет-сервером установлено')
+
+@sio.event
+async def disconnect():
+    logger.info('Соединение с сокет-сервером разорвано')
+
+# Добавим обработчик ошибок сокетов
+@sio.event
+async def connect_error(data):
+    logger.error(f'Ошибка подключения к сокет-серверу: {data}')
 
 # Конструируем WEBHOOK_URL
 RENDER_EXTERNAL_HOSTNAME = os.getenv('RENDER_EXTERNAL_HOSTNAME')
@@ -188,7 +238,7 @@ async def start_command(message: types.Message):
         response.raise_for_status()
         
         # Create a loading animation
-        loading_message = await message.reply("Инициализация системы")
+        loading_message = await bot.send_message(chat_id=message.from_user.id, text="Инициализация системы")
         loading_frames = [
             "Подключение к базе данных ⚡",
             "Проверка данных 📊",
@@ -398,4 +448,7 @@ async def func(message: types.Message):
 # ==========================
 
 if __name__ == '__main__':
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(connect_to_socket())
     uvicorn.run("bot:app", host="0.0.0.0", port=PORT, log_level="info")
+    
