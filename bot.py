@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-sio = socketio.AsyncClient(ssl_verify=False)
+sio = socketio.Client()
 
 # Загрузка переменных окружения из .env файла
 load_dotenv()
@@ -29,60 +29,166 @@ BASE_URL = os.getenv('BASE_URL')
 PORT = int(os.getenv('PORT', 8000))
 WEBHOOK_PATH = "/webhook"
 
-async def connect_to_socket():
-    await sio.connect(url=BASE_URL)
-    logger.info('Подключено к сокетам')
+def connect_to_socket():
+    try:
+        sio.connect(BASE_URL, 
+            headers={
+                'Origin': BASE_URL
+            },
+            transports=['polling'],
+            wait_timeout=10
+        )
+        logger.info('Подключено к сокетам')
+        
+        # Emit join event for all connected users
+        try:
+            response = requests.get(f"{BASE_URL}/users")
+            if response.status_code == 200:
+                users = response.json()
+                for user in users:
+                    telegram_id = str(user.get('telegramId'))
+                    if telegram_id:
+                        sio.emit('join', telegram_id)
+                        logger.info(f'Присоединился к комнате пользователя: {telegram_id}')
+        except Exception as e:
+            logger.error(f'Ошибка при присоединении к комнатам пользователей: {e}')
+            
+    except Exception as e:
+        logger.error(f'Ошибка подключения к сокетам: {e}')
 
 # Добавим глобальную переменную для хранения ID текущего пользователя
 CURRENT_USER_ID = None
 
+# Переменная для состояния уведомлений
+notifications_state = {}  # Dictionary to store notification state per user
+
+# Remove async from the socket event handler
 @sio.event
-async def duelRequest(data):
-    global CURRENT_USER_ID
-    telegram_id = str(data.get('challengedId'))
-    challenger_name = data.get('challengerName')
-    
-    # Подробное логирование для отладки
-    logger.info('==================== НОВЫЙ ВЫЗОВ НА ДУЭЛЬ ====================')
-    logger.info(f'Получены данные: {data}')
-    logger.info(f'ID получателя: {telegram_id}')
-    logger.info(f'Текущий пользователь: {CURRENT_USER_ID}')
-    logger.info(f'Имя вызывающего: {challenger_name}')
-    
-    # Проверяем совпадение ID
-    if telegram_id == CURRENT_USER_ID:
-        logger.info('ID СОВПАДАЮТ! Отправляем уведомление...')
+def duelRequest(data):
+    try:
+        # Debug logging
+        logger.info('==================== НОВЫЙ ВЫЗОВ НА ДУЭЛЬ ====================')
+        logger.info(f'Получены данные: {data}')
         
+        telegram_id = str(data.get('challengedId'))
+        seat_id = data.get('seatId')
+        challenger_name = data.get('challengerName')
+        
+        logger.info(f'ID получателя: {telegram_id}')
+        logger.info(f'ID места: {seat_id}')
+        logger.info(f'Имя вызывающего: {challenger_name}')
+
+        # Create and run a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(send_duel_notification(telegram_id, seat_id, challenger_name))
+        finally:
+            loop.close()
+            
+    except Exception as e:
+        logger.error(f'Ошибка обработки duelRequestSent: {e}')
+
+# Separate async function for sending notifications
+async def send_duel_notification(telegram_id, seat_id, challenger_name):
+    if not notifications_state.get(telegram_id, True):  # Default to enabled if not set
+        logger.info(f'Уведомления отключены для пользователя {telegram_id}')
+        return
+        
+    try:
         webAppKeyboard = WebAppInfo(url="https://desks-duels.netlify.app/")
         keyboard = InlineKeyboardMarkup().add(
             InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
         )
         
+        await bot.send_message(
+            chat_id=telegram_id,
+            text=f"🎯 Вас вызвали на дуэль!\n"
+                 f"<b>{challenger_name}</b> бросил вам вызов за место №{seat_id}!\n"
+                 f"У вас есть 1 минута чтобы принять вызов, иначе вы потеряете своё место ⚔️",
+            reply_markup=keyboard,
+            parse_mode='html'
+        )
+        logger.info('✅ Сообщение успешно отправлено!')
+    except Exception as e:
+        logger.error(f'❌ Ошибка отправки сообщения: {e}')
+
+@sio.event
+def duelDeclined(data):
+    try:
+        logger.info('==================== ДУЭЛЬ ОТКЛОНЕНА ====================')
+        logger.info(f'Получены данные: {data}')
+        
+        duel = data.get('duel', {})
+        telegram_id = str(duel.get('player2'))  # ID того, кто отклонил
+        seat_id = duel.get('seatId')
+        
+        # Create and run a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            await bot.send_message(
-                chat_id=telegram_id,
-                text=f"🎯 Вызов на дуэль!\nПользователь <b>{challenger_name}</b> вызвал вас на дуэль!\nСкорее переходите в приложение, чтобы принять вызов! ⚔️",
-                reply_markup=keyboard,
-                parse_mode='html'
-            )
-            logger.info('✅ Сообщение успешно отправлено!')
-        except Exception as e:
-            logger.error(f'❌ Ошибка отправки сообщения: {e}')
-    else:
-        logger.info('ID не совпадают, пропускаем...')
+            loop.run_until_complete(send_decline_notification(telegram_id, seat_id))
+        finally:
+            loop.close()
+            
+    except Exception as e:
+        logger.error(f'Ошибка обработки duelDeclined: {e}')
 
-# Добавим обработчик подключения для уверенности, что сокеты работают
+
+async def send_decline_notification(telegram_id, seat_id, challenger_name):
+    if not notifications_state.get(telegram_id, True):  # Default to enabled if not set
+        logger.info(f'Уведомления отключены для пользователя {telegram_id}')
+        return
+        
+    try:
+        webAppKeyboard = WebAppInfo(url="https://desks-duels.netlify.app/")
+        keyboard = InlineKeyboardMarkup().add(
+            InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
+        )
+        
+        await bot.send_message(
+            chat_id=telegram_id,
+            text=f"❌ Вы отклонили вызов на дуэль от <b>{challenger_name}</b>!\n"
+                 f"В результате вы потеряли место №{seat_id}!\n"
+                 f"Теперь оно принадлежит вашему сопернику 🏆",
+            reply_markup=keyboard,
+            parse_mode='html'
+        )
+        logger.info('✅ Сообщение об отклонении успешно отправлено!')
+    except Exception as e:
+        logger.error(f'❌ Ошибка отправки сообщения об отклонении: {e}')
+
+
+# Добавим обработчик для всех событий, чтобы видеть, какие события приходят
+@sio.on('*')
+def catch_all(event, data):
+    logger.info(f'🔍 Получено событие: {event}')
+    logger.info(f'📦 Данные события: {data}')
+
+# Обновим обработчики подключения с более подробным логированием
 @sio.event
-async def connect():
+def connect():
     logger.info('🟢 Соединение с сокет-сервером установлено')
+    logger.info(f'🔗 URL соединения: {sio.connection_url}')
+    # Re-emit join event for all users when reconnected
+    try:
+        response = requests.get(f"{BASE_URL}/users")
+        if response.status_code == 200:
+            users = response.json()
+            for user in users:
+                telegram_id = str(user.get('telegramId'))
+                if telegram_id:
+                    sio.emit('join', telegram_id)
+                    logger.info(f'Переподключился к комнате пользователя: {telegram_id}')
+    except Exception as e:
+        logger.error(f'Ошибка при переподключении к комнатам пользователей: {e}')
 
 @sio.event
-async def disconnect():
+def disconnect():
     logger.info('🔴 Соединение с сокет-сервером разорвано')
 
-# Добавим обработчик ошибок сокетов
 @sio.event
-async def connect_error(error):
+def connect_error(error):
     logger.error(f'⚠️ Ошибка подключения к сокет-серверу: {error}')
 
 # Конструируем WEBHOOK_URL
@@ -228,7 +334,6 @@ def schedule_notifications():
             day_of_week="mon-fri",
             id=f"notification_{hour}_{minute}"
         )
-        logger.info(f"Запланировано уведомление в {hour}:{minute} по будням")
 
 # ==========================
 # Обработчики Команд Бота
@@ -319,15 +424,35 @@ async def start_command(message: types.Message):
         
 @dp.message_handler(commands=['notify'])
 async def toggle_notifications(message: types.Message):
-    global notifications_enabled
-    notifications_enabled = not notifications_enabled  # Переключаем состояние флага
-    
-    if notifications_enabled:
-        await message.reply("Уведомления включены. Вы будете получать уведомления.")
-        logger.info(f"Пользователь {message.from_user.id} включил уведомления.")
-    else:
-        await message.reply("Уведомления отключены. Вы больше не будете получать уведомления.")
-        logger.info(f"Пользователь {message.from_user.id} отключил уведомления.")
+    try:
+        user_id = str(message.from_user.id)
+        
+        # Toggle notifications state for this user
+        notifications_state[user_id] = not notifications_state.get(user_id, True)
+        
+        # Create keyboard with current status
+        status_keyboard = InlineKeyboardMarkup(row_width=1)
+        status_text = "🔔 Включены" if notifications_state[user_id] else "🔕 Отключены"
+        status_keyboard.add(
+            InlineKeyboardButton(
+                text=f"Статус уведомлений: {status_text}",
+                callback_data="notification_status"
+            )
+        )
+        
+        # Send response message
+        await message.reply(
+            f"{'🔔 Уведомления включены!' if notifications_state[user_id] else '🔕 Уведомления отключены!'}\n\n"
+            f"{'Теперь вы будете получать уведомления о дуэлях.' if notifications_state[user_id] else 'Теперь вы не будете получать уведомления о дуэлях.'}\n"
+            f"Используйте /notify чтобы {'отключить' if notifications_state[user_id] else 'включить'} уведомления.",
+            reply_markup=status_keyboard
+        )
+        
+        logger.info(f'Пользователь {user_id} {"включил" if notifications_state[user_id] else "отключил"} уведомления')
+        
+    except Exception as e:
+        logger.error(f'Ошибка при изменении настроек уведомлений: {e}')
+        await message.reply("Произошла ошибка при изменении настроек уведомлений. Попробуйте позже.")
 
 @dp.message_handler(commands=['restart'])
 async def delete_user(message: types.Message):
@@ -363,6 +488,15 @@ async def delete_user(message: types.Message):
             f'Сервер не отвечает.\n<b>Ошибка удаления пользователя: {e}</b>',
             parse_mode='html'
         )
+
+@dp.message_handler(commands=['socket_status'])
+async def socket_status(message: types.Message):
+    status = "🟢 Подключено" if sio.connected else "🔴 Отключено"
+    await message.reply(
+        f"Статус сокет-соединения: {status}\n"
+        f"Текущий ID: {CURRENT_USER_ID}\n"
+        f"URL: {sio.connection_url if sio.connected else 'Нет соединения'}"
+    )
 
 # ==========================
 # Маршруты FastAPI
@@ -413,16 +547,6 @@ async def telegram_webhook(request: Request):
 # Lifespan Event Handlers
 # ==========================
 
-async def ping_server():
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"https://{RENDER_EXTERNAL_HOSTNAME}/health") as response:
-                if response.status == 200:
-                    logger.info("Keep-alive ping successful")
-                else:
-                    logger.warning(f"Keep-alive ping failed with status {response.status}")
-    except Exception as e:
-        logger.error(f"Keep-alive ping error: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -431,9 +555,6 @@ async def lifespan(app: FastAPI):
     
     # Добавляем задачу для отправки уведомлений
     schedule_notifications()
-    
-    # Добавляем задачу для пинга сервера каждые 14 минут
-    scheduler.add_job(ping_server, 'interval', minutes=14)
     
     # Запускаем планировщик
     scheduler.start()
@@ -453,14 +574,15 @@ async def lifespan(app: FastAPI):
 @dp.message_handler(content_types=['text'])
 async def func(message: types.Message):
     if message.text not in ['/start', '/restart', '/notify']:
-        await message.reply('Я не понимаю, что вы хотите сделать. Воспользуйтесь командой /start для начала работы с ботом.')
+        await message.reply('Не понимаю, что вы хотите сделать. Воспользуйтесь командой /start для начала работы с ботом.')
 
 # ==========================
 # Запуск Приложения
 # ==========================
 
 if __name__ == '__main__':
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(connect_to_socket())
-    uvicorn.run("bot:app", host="0.0.0.0", port=PORT, log_level="info")
-    
+    try:
+        connect_to_socket()
+        uvicorn.run("bot:app", host="0.0.0.0", port=PORT, log_level="info")
+    except KeyboardInterrupt:
+        pass
