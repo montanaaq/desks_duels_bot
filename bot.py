@@ -122,18 +122,22 @@ def duelDeclined(data):
         duel = data.get('duel', {})
         telegram_id = str(duel.get('player2'))  # ID того, кто отклонил
         seat_id = duel.get('seatId')
+        challenger_name = data.get('challengerName', 'Соперник')
+        
+        logger.info(f'ID получателя: {telegram_id}')
+        logger.info(f'ID места: {seat_id}')
+        logger.info(f'Имя вызывающего: {challenger_name}')
         
         # Create and run a new event loop for this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(send_decline_notification(telegram_id, seat_id))
+            loop.run_until_complete(send_decline_notification(telegram_id, seat_id, challenger_name))
         finally:
             loop.close()
             
     except Exception as e:
         logger.error(f'Ошибка обработки duelDeclined: {e}')
-
 
 async def send_decline_notification(telegram_id, seat_id, challenger_name):
     if not notifications_state.get(telegram_id, True):  # Default to enabled if not set
