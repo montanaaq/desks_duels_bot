@@ -29,6 +29,8 @@ BASE_URL = os.getenv('BASE_URL')
 PORT = int(os.getenv('PORT', 8000))
 WEBHOOK_PATH = "/webhook"
 
+message_sent = {}  # Dictionary to track if message was sent for a duel
+
 def connect_to_socket():
     try:
         sio.connect(BASE_URL, 
@@ -49,7 +51,7 @@ def connect_to_socket():
                     telegram_id = str(user.get('telegramId'))
                     if telegram_id:
                         sio.emit('join', telegram_id)
-                        logger.info(f'Присоединился к комнате пользователя: {telegram_id}')
+                        logger.info(f'Переподключился к комнате пользователя: {telegram_id}')
         except Exception as e:
             logger.error(f'Ошибка при присоединении к комнатам пользователей: {e}')
             
@@ -70,21 +72,114 @@ def duelRequest(data):
         logger.info('==================== НОВЫЙ ВЫЗОВ НА ДУЭЛЬ ====================')
         logger.info(f'Получены данные: {data}')
         
-        telegram_id = str(data.get('challengedId'))
+        telegram_id = str(data.get('challengedId'))  # ID того, кому бросили вызов
+        challenger_id = str(data.get('challengerId'))  # ID того, кто бросил вызов
         seat_id = data.get('seatId')
-        challenger_name = data.get('challengerName')
+        challenger_name = data.get('challengerName', 'Неизвестный игрок')
+        challenged_name = data.get('challengedName', 'Неизвестный игрок')
         
         logger.info(f'ID получателя: {telegram_id}')
+        logger.info(f'ID отправителя: {challenger_id}')
         logger.info(f'ID места: {seat_id}')
         logger.info(f'Имя вызывающего: {challenger_name}')
+        logger.info(f'Имя вызываемого: {challenged_name}')
 
         # Create and run a new event loop for this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(send_duel_notification(telegram_id, seat_id, challenger_name))
+            # Проверяем, что ID получателя и отправителя разные
+            if telegram_id != challenger_id:
+                # Отправляем уведомление тому, кого вызвали на дуэль
+                if telegram_id:
+                    loop.run_until_complete(send_duel_notification(telegram_id, seat_id, challenger_name))
+                # Отправляем уведомление тому, кто бросил вызов
+                if challenger_id:
+                    loop.run_until_complete(send_duel_request_confirmation(challenger_id, seat_id, challenged_name))
+            else:
+                logger.warning(f'Попытка отправить уведомление одному и тому же пользователю: {telegram_id}')
         finally:
             loop.close()
+            
+    except Exception as e:
+        logger.error(f'Ошибка обработки duelRequestSent: {e}')
+
+processed_timeouts = set()
+
+
+# Очистка старых таймаутов каждый час
+async def cleanup_timeouts():
+    while True:
+        await asyncio.sleep(3600)  # 1 час
+        processed_timeouts.clear()
+        logger.info('Очищен список обработанных таймаутов')
+
+async def send_duel_request_confirmation(telegram_id, seat_id, opponent_name):
+    if not notifications_state.get(telegram_id, True):  # Default to enabled if not set
+        logger.info(f'Уведомления отключены для пользователя {telegram_id}')
+        return
+        
+    try:
+        webAppKeyboard = WebAppInfo(url="https://desks-duels.netlify.app/")
+        keyboard = InlineKeyboardMarkup().add(
+            InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
+        )
+        
+        await bot.send_message(
+            chat_id=telegram_id,
+            text=f"⚔️ Вы бросили вызов на дуэль!\n"
+                 f"Вы вызвали на дуэль <b>{opponent_name}</b> за место №{seat_id}!\n"
+                 f"У вашего соперника есть 1 минута на принятие вызова ⏳",
+            reply_markup=keyboard,
+            parse_mode='html'
+        )
+        logger.info('✅ Сообщение подтверждения отправлено!')
+    except Exception as e:
+        logger.error(f'❌ Ошибка отправки сообщения подтверждения: {e}')
+
+@sio.event
+def duelRequestSent(data):
+    try:
+        logger.info('==================== ЗАПРОС НА ДУЭЛЬ ОТПРАВЛЕН ====================')
+        logger.info(f'Получены данные: {data}')
+        
+        challenger_id = str(data.get('challengerId'))  # ID того, кто бросил вызов
+        challenged_id = str(data.get('challengedId'))  # ID того, кому бросили вызов
+        seat_id = data.get('seatId')
+        
+        # Получаем имена участников через API
+        try:
+            challenger_response = requests.post(
+                f"{BASE_URL}/auth/check",
+                json={"telegramId": challenger_id}
+            )
+            challenger_response.raise_for_status()
+            challenger_name = challenger_response.json().get('name', 'Неизвестный игрок')
+
+            challenged_response = requests.post(
+                f"{BASE_URL}/auth/check",
+                json={"telegramId": challenged_id}
+            )
+            challenged_response.raise_for_status()
+            challenged_name = challenged_response.json().get('name', 'Неизвестный игрок')
+            
+            logger.info(f'ID отправителя: {challenger_id}')
+            logger.info(f'ID получателя: {challenged_id}')
+            logger.info(f'ID места: {seat_id}')
+            logger.info(f'Имя отправителя: {challenger_name}')
+            logger.info(f'Имя получателя: {challenged_name}')
+
+            # Create and run a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                # Отправляем уведомление тому, кто бросил вызов
+                loop.run_until_complete(send_duel_request_confirmation(challenger_id, seat_id, challenged_name))
+            finally:
+                loop.close()
+                
+        except Exception as e:
+            logger.error(f'Ошибка получения информации о пользователях: {e}')
             
     except Exception as e:
         logger.error(f'Ошибка обработки duelRequestSent: {e}')
@@ -113,31 +208,73 @@ async def send_duel_notification(telegram_id, seat_id, challenger_name):
     except Exception as e:
         logger.error(f'❌ Ошибка отправки сообщения: {e}')
 
+processed_duel_ids = set()
+
 @sio.event
 def duelDeclined(data):
     try:
-        logger.info('==================== ДУЭЛЬ ОТКЛОНЕНА ====================')
+        logger.info('==================== ДУЭЛЬ ОТКЛОНЕНА/ТАЙМАУТ ====================')
         logger.info(f'Получены данные: {data}')
         
         duel = data.get('duel', {})
-        telegram_id = str(duel.get('player2'))  # ID того, кто отклонил
+        challenger_id = str(duel.get('player1'))  # ID того, кто бросил вызов
+        challenged_id = str(duel.get('player2'))  # ID того, кто отклонил
         seat_id = duel.get('seatId')
-        challenger_name = data.get('challengerName', 'Соперник')
+        challenger_name = data.get('challengerName', 'Инициатор')
+        challenged_name = data.get('challengedName', 'Оппонент')
+        message = data.get('message', '')
         
-        logger.info(f'ID получателя: {telegram_id}')
+        logger.info(f'ID вызвавшего: {challenger_id}')
+        logger.info(f'ID отклонившего: {challenged_id}')
         logger.info(f'ID места: {seat_id}')
-        logger.info(f'Имя вызывающего: {challenger_name}')
-        
-        # Create and run a new event loop for this thread
+        logger.info(f'Имя вызвавшего: {challenger_name}')
+        logger.info(f'Имя отклонившего: {challenged_name}')
+
+        # Создаем и запускаем новый event loop только один раз
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(send_decline_notification(telegram_id, seat_id, challenger_name))
+            if 'Вы заняли место' in message:
+                # Сообщение для победителя (того, кто бросил вызов)
+                loop.run_until_complete(send_win_notification(challenger_id, seat_id, challenged_name))
+            elif 'так как вы отклонили дуэль' in message:
+                # Сообщение для того, кто отклонил
+                loop.run_until_complete(send_decline_notification(challenged_id, seat_id, challenger_name))
         finally:
             loop.close()
             
     except Exception as e:
         logger.error(f'Ошибка обработки duelDeclined: {e}')
+
+async def send_win_notification(telegram_id, seat_id, opponent_name):
+    if not notifications_state.get(telegram_id, True):  # Default to enabled if not set
+        logger.info(f'Уведомления отключены для пользователя {telegram_id}')
+        return
+        
+    try:
+        async with aiohttp.ClientSession() as session:
+            webAppKeyboard = WebAppInfo(url="https://desks-duels.netlify.app/")
+            keyboard = InlineKeyboardMarkup().add(
+                InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
+            )
+            
+            await bot.send_message(
+                chat_id=telegram_id,
+                text=f"🏆 Поздравляем! Вы получили место №{seat_id}!\n"
+                     f"<b>{opponent_name}</b> отклонил вызов на дуэль.",
+                reply_markup=keyboard,
+                parse_mode='html'
+            )
+            logger.info('✅ Сообщение о победе успешно отправлено!')
+    except Exception as e:
+        logger.error(f'❌ Ошибка отправки сообщения о победе: {e}')
+
+# Очистка старых ID дуэлей каждый час
+async def cleanup_processed_duels():
+    while True:
+        await asyncio.sleep(3600)  # 1 час
+        processed_duel_ids.clear()
+        logger.info('Очищен список обработанных дуэлей')
 
 async def send_decline_notification(telegram_id, seat_id, challenger_name):
     if not notifications_state.get(telegram_id, True):  # Default to enabled if not set
@@ -145,23 +282,30 @@ async def send_decline_notification(telegram_id, seat_id, challenger_name):
         return
         
     try:
-        webAppKeyboard = WebAppInfo(url="https://desks-duels.netlify.app/")
-        keyboard = InlineKeyboardMarkup().add(
-            InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
-        )
-        
-        await bot.send_message(
-            chat_id=telegram_id,
-            text=f"❌ Вы отклонили вызов на дуэль от <b>{challenger_name}</b>!\n"
-                 f"В результате вы потеряли место №{seat_id}!\n"
-                 f"Теперь оно принадлежит вашему сопернику 🏆",
-            reply_markup=keyboard,
-            parse_mode='html'
-        )
-        logger.info('✅ Сообщение об отклонении успешно отправлено!')
+        async with aiohttp.ClientSession() as session:  # Используем контекстный менеджер для сессии
+            webAppKeyboard = WebAppInfo(url="https://desks-duels.netlify.app/")
+            keyboard = InlineKeyboardMarkup().add(
+                InlineKeyboardButton(text="Перейти в приложение", web_app=webAppKeyboard)
+            )
+            
+            await bot.send_message(
+                chat_id=telegram_id,
+                text=f"❌ Вы отклонили вызов на дуэль от <b>{challenger_name}</b>!\n"
+                     f"В результате вы потеряли место №{seat_id}!\n"
+                     f"Теперь оно принадлежит вашему сопернику",
+                reply_markup=keyboard,
+                parse_mode='html'
+            )
+            logger.info('✅ Сообщение об отклонении успешно отправлено!')
     except Exception as e:
         logger.error(f'❌ Ошибка отправки сообщения об отклонении: {e}')
 
+# Очистка старых записей каждый час
+async def cleanup_message_sent():
+    while True:
+        await asyncio.sleep(3600)  # 1 час
+        message_sent.clear()
+        logger.info('Очищен список отправленных сообщений')
 
 # Добавим обработчик для всех событий, чтобы видеть, какие события приходят
 @sio.on('*')
